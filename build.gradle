@@ -1,0 +1,153 @@
+import org.springframework.cloud.contract.verifier.config.TestFramework
+import org.springframework.cloud.contract.verifier.config.TestMode
+
+buildscript {
+    repositories {
+        jcenter()
+    }
+    dependencies {
+        classpath "org.springframework.boot:spring-boot-gradle-plugin:1.5.11.RELEASE"
+        classpath "org.springframework.cloud:spring-cloud-contract-gradle-plugin:1.2.4.RELEASE"
+        classpath "io.spring.gradle:dependency-management-plugin:1.0.5.RELEASE"
+
+        classpath "se.transmode.gradle:gradle-docker:1.2"
+        classpath "com.jayway.restassured:rest-assured:2.5.0"
+        classpath "com.jayway.restassured:spring-mock-mvc:2.5.0"
+        classpath "net.researchgate:gradle-release:2.6.0"
+    }
+}
+
+group = 'devbadger'
+
+apply plugin: 'java'
+apply plugin: 'maven'
+apply plugin: 'jacoco'
+apply plugin: 'groovy'
+apply plugin: 'io.spring.dependency-management'
+apply plugin: 'net.researchgate.release'
+apply plugin: 'docker'
+apply plugin: 'maven-publish' // used to deploy contract stubs to maven local
+apply plugin: 'org.springframework.boot'
+apply plugin: 'spring-cloud-contract'
+
+sourceCompatibility = 1.8
+targetCompatibility = 1.8
+
+    repositories {
+        mavenLocal()
+        jcenter()
+    }
+
+dependencyManagement {
+    imports {
+        mavenBom "org.springframework.cloud:spring-cloud-dependencies:Edgware.SR3"
+    }
+
+    dependencies {
+        // internal
+//            dependency "consensus:flex-security-authorization:${version}"
+//            dependency "com.consensus:ConnectedCommerceCommonLogging:2.5.0"
+
+        // external
+        dependency "org.projectlombok:lombok:1.16.20"
+        dependency "com.google.guava:guava:23.0"
+        dependency "com.fasterxml.jackson.core:jackson-databind:2.8.11.1"
+        dependency "com.fasterxml.jackson.datatype:jackson-datatype-jdk8:2.8.11"
+        dependency "com.fasterxml.jackson.datatype:jackson-datatype-guava:2.8.11"
+        dependency "org.aspectj:aspectjweaver:1.8.13"
+        dependency "org.springframework.boot:spring-boot-starter-actuator:1.5.11.RELEASE"
+    }
+
+    testCompile {
+        dependencies {
+            dependency "org.springframework:spring-test:4.3.14.RELEASE"
+        }
+    }
+}
+
+dependencies {
+    testCompile "org.codehaus.groovy:groovy-all:2.4.10"
+    testCompile "org.spockframework:spock-core:1.1-groovy-2.4"
+    testCompile "org.springframework.boot:spring-boot-starter-test"
+    testCompile "org.springframework:spring-test"
+}
+
+jacoco {
+    toolVersion = "0.8.0"
+}
+jacocoTestReport {
+    reports {
+        xml.enabled false
+        csv.enabled false
+        html.destination file("${buildDir}/jacocoHtml")
+    }
+}
+
+/**
+ * This is a workaround because this research gate release plugin does not support
+ * multi-project sibling dependency build order.
+ *
+ * Run release using "./gradlew :flex-gateway-app:release -Prelease.useAutomaticVersion=true"
+ *
+ * Another work around is to structure the multi project as recommended by research gate.
+ */
+project.afterEvaluate {
+    project.configurations.compile.dependencies
+            .findAll({ it instanceof ProjectDependency })
+            .each({ d ->
+        ProjectDependency p = d as ProjectDependency
+        project.tasks.release.tasks.each { String t ->
+            t = t.substring(t.lastIndexOf(PATH_SEPARATOR) + 1)
+            project.tasks.getByName(t).dependsOn p.dependencyProject.tasks.getByName(t)
+        }
+    })
+}
+
+release {
+    revertOnFail = true
+    failOnSnapshotDependencies = false
+    tagTemplate = '$name-$version'
+    buildTasks = ['clean', 'build', 'install']
+    versionPropertyFile = '../gradle.properties'
+    git {
+        requireBranch = ''
+        commitVersionFileOnly = false
+    }
+}
+
+contracts{
+    targetFramework = TestFramework.SPOCK
+    testMode = TestMode.MOCKMVC
+    generatedTestSourcesDir = project.file("${project.rootDir}/flex-gateway-app/src/test/groovy")
+    contractsDslDir = project.file("${project.rootDir}/flex-gateway-app/src/test/resources/contracts")
+    basePackageForTests = 'com.consensus.flex.gateway.app'
+    packageWithBaseClasses = 'com.consensus.flex.gateway.app.base'
+}
+
+
+task image(type: Docker, dependsOn: build ) {
+    applicationName = jar.baseName
+    dockerfile = file('Dockerfile')
+    doFirst {
+        copy {
+            from jar
+            into "${stageDir}/target"
+
+        }
+    }
+}
+
+task publishImage(type: Docker, dependsOn: build ) {
+    applicationName = jar.baseName
+    push = true
+    dockerfile = file('Dockerfile')
+    doFirst {
+        copy {
+            from jar
+            into "${stageDir}/target"
+
+        }
+    }
+}
+
+afterReleaseBuild.dependsOn publishImage

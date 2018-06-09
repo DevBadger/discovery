@@ -1,0 +1,14 @@
+server:
+  port: 11550
+
+eureka:
+  instance:
+    hostname: discovery
+  client:
+    register-with-eureka: false
+    fetch-registry: false
+  dashboard:
+    enabled: true
+
+logging:
+  path: /var/log/
